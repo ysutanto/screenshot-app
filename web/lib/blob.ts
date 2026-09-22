@@ -1,4 +1,4 @@
-import { put, list } from "@vercel/blob";
+import { put, list, del } from "@vercel/blob";
 
 /** User-facing text for a store-level outage. */
 export const STORAGE_UNAVAILABLE_MESSAGE =
@@ -135,4 +135,79 @@ export async function uploadRecording(
     })
   );
   return { url: blob.url };
+}
+
+export type ScreenshotSummary = {
+  id: string;
+  uploadedAt: string;
+  size: number;
+};
+
+/** Page through a prefix, collecting every blob (the SDK caps a page at 1000). */
+async function listAll(prefix: string) {
+  const out: { pathname: string; url: string; size: number; uploadedAt: Date }[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await blobOp(`list ${prefix}`, () =>
+      list({ prefix, limit: 1000, cursor })
+    );
+    out.push(...res.blobs);
+    cursor = res.cursor;
+  } while (cursor);
+  return out;
+}
+
+function idFromPathname(pathname: string, prefix: string): string {
+  return pathname.slice(prefix.length).replace(/\.(png|json)$/, "");
+}
+
+/** Every stored screenshot, newest first. */
+export async function listScreenshots(): Promise<ScreenshotSummary[]> {
+  const blobs = await listAll("screenshots/");
+  return blobs
+    .map((b) => ({
+      id: idFromPathname(b.pathname, "screenshots/"),
+      uploadedAt: new Date(b.uploadedAt).toISOString(),
+      size: b.size,
+    }))
+    .filter((s) => s.id)
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+}
+
+/**
+ * Delete the given screenshots along with the annotation and source metadata
+ * belonging to them, so a prune never leaves orphaned records behind.
+ */
+export async function deleteScreenshots(
+  ids: string[]
+): Promise<{ deleted: number; bytes: number }> {
+  if (!ids.length) return { deleted: 0, bytes: 0 };
+  const wanted = new Set(ids);
+
+  const targets: { url: string; size: number; isScreenshot: boolean }[] = [];
+  for (const prefix of ["screenshots/", "annotations/", "sources/"] as const) {
+    for (const b of await listAll(prefix)) {
+      if (wanted.has(idFromPathname(b.pathname, prefix))) {
+        targets.push({
+          url: b.url,
+          size: b.size,
+          isScreenshot: prefix === "screenshots/",
+        });
+      }
+    }
+  }
+
+  let deleted = 0;
+  let bytes = 0;
+  // The delete API takes a batch of urls; keep batches modest so one failure
+  // does not strand a very large prune.
+  for (let i = 0; i < targets.length; i += 100) {
+    const batch = targets.slice(i, i + 100);
+    await blobOp("delete batch", () => del(batch.map((t) => t.url)));
+    for (const t of batch) {
+      bytes += t.size;
+      if (t.isScreenshot) deleted++;
+    }
+  }
+  return { deleted, bytes };
 }
