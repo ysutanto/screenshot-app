@@ -1,5 +1,10 @@
 import { nanoid } from "nanoid";
-import { uploadScreenshot, uploadSource } from "@/lib/blob";
+import {
+  BlobUnavailableError,
+  STORAGE_UNAVAILABLE_MESSAGE,
+  uploadScreenshot,
+  uploadSource,
+} from "@/lib/blob";
 
 export const runtime = "nodejs";
 
@@ -31,12 +36,29 @@ export async function POST(req: Request) {
   }
 
   const id = nanoid();
-  const { url: blobUrl } = await uploadScreenshot(id, file);
+  let blobUrl: string;
+  try {
+    ({ url: blobUrl } = await uploadScreenshot(id, file));
+  } catch (err) {
+    if (err instanceof BlobUnavailableError) {
+      return Response.json(
+        { error: STORAGE_UNAVAILABLE_MESSAGE },
+        { status: 503, headers: CORS }
+      );
+    }
+    throw err;
+  }
 
   // Optional source URL (e.g. the browser tab a window was captured from).
+  // Best-effort: the screenshot is already stored, so losing this metadata must
+  // not fail the upload and leave the caller without its id.
   const sourceUrl = form.get("sourceUrl");
   if (typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)) {
-    await uploadSource(id, sourceUrl);
+    try {
+      await uploadSource(id, sourceUrl);
+    } catch (err) {
+      console.error(`[upload] source URL not stored for ${id}:`, err);
+    }
   }
 
   return Response.json({ id, url: `/s/${id}`, blobUrl }, { headers: CORS });

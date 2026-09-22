@@ -1,5 +1,10 @@
-import { list } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  BlobUnavailableError,
+  STORAGE_UNAVAILABLE_MESSAGE,
+  fetchBlobContents,
+  findBlob,
+} from "@/lib/blob";
 import { Resvg } from "@resvg/resvg-js";
 import sharp from "sharp";
 import path from "path";
@@ -52,13 +57,12 @@ function shapesToSvg(shapes: ShapeData[], width: number, height: number): string
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${parts.join("")}</svg>`;
 }
 
+// Store-level failures deliberately propagate: silently falling back to []
+// would hand the user a clean PNG with their annotations quietly missing.
 async function fetchBlobJson(prefix: string): Promise<ShapeData[]> {
-  const { blobs } = await list({ prefix, limit: 1 });
-  if (!blobs.length) return [];
-  const res = await fetch(blobs[0].url, {
-    headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-    cache: "no-store",
-  });
+  const blob = await findBlob(prefix);
+  if (!blob) return [];
+  const res = await fetchBlobContents(blob.url, { cache: "no-store" });
   if (!res.ok) return [];
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -70,53 +74,61 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const { blobs } = await list({ prefix: `screenshots/${id}.png`, limit: 1 });
-  if (!blobs.length) return new NextResponse("Not found", { status: 404 });
+  try {
+    const blob = await findBlob(`screenshots/${id}.png`);
+    if (!blob) return new NextResponse("Not found", { status: 404 });
 
-  const imgRes = await fetch(blobs[0].url, {
-    headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-  });
-  if (!imgRes.ok) return new NextResponse("Not found", { status: 404 });
+    const imgRes = await fetchBlobContents(blob.url);
+    if (!imgRes.ok) return new NextResponse("Not found", { status: 404 });
 
-  const pngBuffer = Buffer.from(await imgRes.arrayBuffer());
-  const shapes = await fetchBlobJson(`annotations/${id}.json`);
+    const pngBuffer = Buffer.from(await imgRes.arrayBuffer());
+    const shapes = await fetchBlobJson(`annotations/${id}.json`);
 
-  let out = pngBuffer;
-  if (shapes.length) {
-    const base = sharp(pngBuffer);
-    const { width, height } = await base.metadata();
-    const svg = shapesToSvg(shapes, width, height);
-    // Rasterize the overlay with resvg using the bundled font, then composite.
-    // (sharp's own SVG renderer relies on librsvg + system fonts, which Vercel
-    // lacks, so text would silently render blank.)
-    const overlay = new Resvg(svg, {
-      fitTo: { mode: "original" },
-      font: {
-        fontFiles: [FONT_PATH],
-        loadSystemFonts: false,
-        defaultFontFamily: "Roboto",
-        sansSerifFamily: "Roboto",
+    let out = pngBuffer;
+    if (shapes.length) {
+      const base = sharp(pngBuffer);
+      const { width, height } = await base.metadata();
+      const svg = shapesToSvg(shapes, width, height);
+      // Rasterize the overlay with resvg using the bundled font, then composite.
+      // (sharp's own SVG renderer relies on librsvg + system fonts, which Vercel
+      // lacks, so text would silently render blank.)
+      const overlay = new Resvg(svg, {
+        fitTo: { mode: "original" },
+        font: {
+          fontFiles: [FONT_PATH],
+          loadSystemFonts: false,
+          defaultFontFamily: "Roboto",
+          sansSerifFamily: "Roboto",
+        },
+      })
+        .render()
+        .asPng();
+      out = await base
+        .composite([{ input: overlay, top: 0, left: 0 }])
+        .png()
+        .toBuffer();
+    }
+
+    // Copy into a standalone, byteOffset-0 Uint8Array. sharp's toBuffer() can
+    // return a Buffer that is a view into a larger pooled ArrayBuffer, which the
+    // Vercel Node response adapter mishandles (UTF-8-decodes the bytes, turning
+    // every byte >= 0x80 into U+FFFD and corrupting the PNG). A tight copy avoids it.
+    const body = new Uint8Array(out);
+
+    return new NextResponse(body, {
+      headers: {
+        "Content-Type": "image/png",
+        "Content-Disposition": `attachment; filename="${id}.png"`,
+        "Cache-Control": "no-store",
       },
-    })
-      .render()
-      .asPng();
-    out = await base
-      .composite([{ input: overlay, top: 0, left: 0 }])
-      .png()
-      .toBuffer();
+    });
+  } catch (err) {
+    if (err instanceof BlobUnavailableError) {
+      return new NextResponse(STORAGE_UNAVAILABLE_MESSAGE, {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    throw err;
   }
-
-  // Copy into a standalone, byteOffset-0 Uint8Array. sharp's toBuffer() can
-  // return a Buffer that is a view into a larger pooled ArrayBuffer, which the
-  // Vercel Node response adapter mishandles (UTF-8-decodes the bytes, turning
-  // every byte >= 0x80 into U+FFFD and corrupting the PNG). A tight copy avoids it.
-  const body = new Uint8Array(out);
-
-  return new NextResponse(body, {
-    headers: {
-      "Content-Type": "image/png",
-      "Content-Disposition": `attachment; filename="${id}.png"`,
-      "Cache-Control": "no-store",
-    },
-  });
 }

@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { issueSignedToken, presignUrl } from "@vercel/blob";
+import { STORAGE_UNAVAILABLE_MESSAGE } from "@/lib/blob";
 
 export const runtime = "nodejs";
 
@@ -38,28 +39,39 @@ export async function POST(req: Request) {
   const id = nanoid();
   const pathname = `recordings/${id}.mp4`;
 
-  const signed = await issueSignedToken({
-    pathname,
-    operations: ["put"],
-    allowedContentTypes: [contentType],
-    maximumSizeInBytes: MAX_BYTES,
-  });
-
-  const { presignedUrl } = await presignUrl(
-    {
-      clientSigningToken: signed.clientSigningToken,
-      delegationToken: signed.delegationToken,
-    },
-    {
-      operation: "put",
+  let presignedUrl: string;
+  try {
+    const signed = await issueSignedToken({
       pathname,
-      access: "private",
+      operations: ["put"],
       allowedContentTypes: [contentType],
       maximumSizeInBytes: MAX_BYTES,
-      addRandomSuffix: false,
-      allowOverwrite: true,
-    }
-  );
+    });
+
+    ({ presignedUrl } = await presignUrl(
+      {
+        clientSigningToken: signed.clientSigningToken,
+        delegationToken: signed.delegationToken,
+      },
+      {
+        operation: "put",
+        pathname,
+        access: "private",
+        allowedContentTypes: [contentType],
+        maximumSizeInBytes: MAX_BYTES,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      }
+    ));
+  } catch (err) {
+    // Signing is a store operation, so a suspended store fails here rather than
+    // on the client's subsequent PUT.
+    console.error(`[presign] could not sign upload for ${pathname}:`, err);
+    return Response.json(
+      { error: STORAGE_UNAVAILABLE_MESSAGE },
+      { status: 503, headers: CORS }
+    );
+  }
 
   return Response.json(
     { id, uploadUrl: presignedUrl, url: `/v/${id}` },

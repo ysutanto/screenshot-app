@@ -39,8 +39,13 @@ export default function AnnotationCanvas({
   const [color, setColor] = useState("#ff3b30");
   const [fontSize, setFontSize] = useState(48);
   const [shapes, setShapes] = useState<ShapeData[]>([]);
-  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | null>(null);
+  const [saveStatus, setSaveStatus] = useState<
+    "saved" | "saving" | "error" | null
+  >(null);
   const isFirstLoad = useRef(true);
+  // Set when annotations could not be loaded. Auto-save stays disabled while it
+  // is true, so an empty canvas from a failed load never overwrites good data.
+  const loadFailed = useRef(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [editorBox, setEditorBox] = useState<{ left: number; top: number } | null>(
@@ -59,11 +64,17 @@ export default function AnnotationCanvas({
   useEffect(() => {
     const id = shareUrl.split("/").pop();
     fetch(`/api/annotations/${id}`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`annotations load failed: ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) setShapes(data);
       })
-      .catch(() => {})
+      .catch(() => {
+        loadFailed.current = true;
+        setSaveStatus("error");
+      })
       .finally(() => {
         // Use setTimeout so the flag flips after React has processed setShapes,
         // preventing the loaded shapes from immediately triggering a re-save.
@@ -73,7 +84,7 @@ export default function AnnotationCanvas({
 
   // Auto-save to server (debounced) whenever shapes change
   useEffect(() => {
-    if (isFirstLoad.current) return;
+    if (isFirstLoad.current || loadFailed.current) return;
     setSaveStatus("saving");
     const id = shareUrl.split("/").pop();
     const timer = setTimeout(() => {
@@ -82,8 +93,8 @@ export default function AnnotationCanvas({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(shapes),
       })
-        .then(() => setSaveStatus("saved"))
-        .catch(() => setSaveStatus(null));
+        .then((r) => setSaveStatus(r.ok ? "saved" : "error"))
+        .catch(() => setSaveStatus("error"));
     }, 800);
     return () => clearTimeout(timer);
   }, [shapes, shareUrl]);
@@ -338,8 +349,18 @@ export default function AnnotationCanvas({
       />
       <div className="relative flex flex-1 items-center justify-center overflow-auto bg-neutral-950">
         {saveStatus && (
-          <div className="absolute right-3 top-3 z-10 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-400">
-            {saveStatus === "saving" ? "Saving…" : "Saved ✓"}
+          <div
+            className={`absolute right-3 top-3 z-10 rounded px-2 py-1 text-xs ${
+              saveStatus === "error"
+                ? "bg-red-950 text-red-300"
+                : "bg-neutral-800 text-neutral-400"
+            }`}
+          >
+            {saveStatus === "saving"
+              ? "Saving…"
+              : saveStatus === "error"
+                ? "Not saved — storage unavailable"
+                : "Saved ✓"}
           </div>
         )}
         {imageStatus === "loading" && (
