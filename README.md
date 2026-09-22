@@ -2,7 +2,7 @@
 
 Capture a screen region on Mac, get a shareable link instantly, and annotate with rectangles, circles, and text — right in the browser.
 
-**Live:** https://web-tau-six-58.vercel.app
+**Live:** https://actava-screenshot.vercel.app
 
 ## Demo
 

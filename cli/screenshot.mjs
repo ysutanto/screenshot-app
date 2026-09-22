@@ -12,7 +12,7 @@ const urlFlagIdx = process.argv.indexOf("--url");
 const BASE_URL =
   (urlFlagIdx !== -1 ? process.argv[urlFlagIdx + 1] : undefined) ??
   process.env.SCREENSHOT_APP_URL ??
-  "https://web-tau-six-58.vercel.app";
+  "https://actava-screenshot.vercel.app";
 
 const modeFlagIdx = process.argv.indexOf("--mode");
 const mode = (modeFlagIdx !== -1 ? process.argv[modeFlagIdx + 1] : undefined) ?? "region";

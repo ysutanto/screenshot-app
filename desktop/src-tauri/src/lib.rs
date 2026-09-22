@@ -13,7 +13,7 @@ const CAPTURE_SHORTCUT: &str = "CommandOrControl+Shift+9";
 
 fn upload_api_base() -> String {
     std::env::var("UPLOAD_API_BASE")
-        .unwrap_or_else(|_| "https://web-tau-six-58.vercel.app".to_string())
+        .unwrap_or_else(|_| "https://actava-screenshot.vercel.app".to_string())
 }
 
 #[derive(Clone, Serialize)]
