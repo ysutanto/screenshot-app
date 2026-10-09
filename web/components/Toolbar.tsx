@@ -19,6 +19,8 @@ export default function Toolbar({
   fontSize,
   onFontSizeChange,
   onExport,
+  onCopy,
+  copyStatus,
 }: {
   tool: Tool;
   onToolChange: (tool: Tool) => void;
@@ -27,6 +29,8 @@ export default function Toolbar({
   fontSize: number;
   onFontSizeChange: (size: number) => void;
   onExport: () => void;
+  onCopy: () => void;
+  copyStatus: "copied" | "error" | null;
 }) {
   return (
     <div className="flex items-center gap-2 bg-neutral-800 px-3 py-2 text-sm text-white">
@@ -71,8 +75,25 @@ export default function Toolbar({
 
       <button
         type="button"
+        onClick={onCopy}
+        aria-live="polite"
+        className={`ml-auto rounded px-3 py-1.5 ${
+          copyStatus === "error"
+            ? "bg-red-900 text-red-200"
+            : "bg-neutral-700 hover:bg-neutral-600"
+        }`}
+      >
+        {copyStatus === "copied"
+          ? "Copied ✓"
+          : copyStatus === "error"
+            ? "Copy failed — use Download"
+            : "Copy image"}
+      </button>
+
+      <button
+        type="button"
         onClick={onExport}
-        className="ml-auto rounded bg-neutral-700 px-3 py-1.5 hover:bg-neutral-600"
+        className="rounded bg-neutral-700 px-3 py-1.5 hover:bg-neutral-600"
       >
         Download PNG
       </button>

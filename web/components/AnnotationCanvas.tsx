@@ -46,6 +46,7 @@ export default function AnnotationCanvas({
   // Set when annotations could not be loaded. Auto-save stays disabled while it
   // is true, so an empty canvas from a failed load never overwrites good data.
   const loadFailed = useRef(false);
+  const [copyStatus, setCopyStatus] = useState<"copied" | "error" | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [editorBox, setEditorBox] = useState<{ left: number; top: number } | null>(
@@ -323,6 +324,39 @@ export default function AnnotationCanvas({
     });
   }
 
+  function flashCopyStatus(status: "copied" | "error") {
+    setCopyStatus(status);
+    setTimeout(() => setCopyStatus(null), 2000);
+  }
+
+  function handleCopy() {
+    setSelectedId(null);
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+      flashCopyStatus("error");
+      return;
+    }
+    // Same full-resolution render as the download, one frame later so the
+    // deselected Transformer handles are gone from the image.
+    const png = new Promise<Blob>((resolve, reject) => {
+      requestAnimationFrame(() => {
+        const stage = stageRef.current;
+        if (!stage) return reject(new Error("canvas not ready"));
+        stage.toBlob({
+          pixelRatio: 1 / stageScale,
+          mimeType: "image/png",
+          callback: (blob) =>
+            blob ? resolve(blob) : reject(new Error("render failed")),
+        });
+      });
+    });
+    // The ClipboardItem must be created synchronously inside the click, with
+    // the image as a promise — Safari rejects a write that starts after an await.
+    navigator.clipboard
+      .write([new ClipboardItem({ "image/png": png })])
+      .then(() => flashCopyStatus("copied"))
+      .catch(() => flashCopyStatus("error"));
+  }
+
   function registerRef(id: string) {
     return (node: Konva.Node | null) => {
       if (node) shapeRefs.current.set(id, node);
@@ -346,6 +380,8 @@ export default function AnnotationCanvas({
         fontSize={fontSize}
         onFontSizeChange={setFontSize}
         onExport={handleExport}
+        onCopy={handleCopy}
+        copyStatus={copyStatus}
       />
       <div className="relative flex flex-1 items-center justify-center overflow-auto bg-neutral-950">
         {saveStatus && (
